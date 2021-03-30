@@ -2,7 +2,8 @@
 A simple command line interface to change .cbr and .cbz comic files with png or jpeg images to webp, improving compression markedly
 
 # Setup
-This project uses [libwebp-net](https://github.com/imazen/libwebp-net), in order to use download the libwebp.dll from [here](https://s3.amazonaws.com/resizer-dynamic-downloads/webp/0.5.2/x86_64/libwebp.dll) and add to the project root
+This project uses [libwebp-net](https://github.com/imazen/libwebp-net) and it is included in the repo.
+
 
 # Running
 Run `dotnet run -- [args]`  
@@ -14,6 +15,7 @@ Run `dotnet run -- [args]`
   -s|--skip                 Skip processing file if it already exists in the output folder
   -q|--quality              Quality to use for the webp files (default: 75)
   -p|--parallel             Run in parallel, utilizing all computing resources
+  -m|--multi-processing     Number of images to be processed at a time (better not changed when using Parallel mode), (default: 1)
   -?|-h|--help              Show help information
   ```
 
