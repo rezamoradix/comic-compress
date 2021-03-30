@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 using System.Collections.Generic;
 using McMaster.Extensions.CommandLineUtils;
 using System.ComponentModel.DataAnnotations;
-using System.Threading;
+using System.Diagnostics;
 
 namespace ComicCompressor
 {
@@ -32,10 +32,14 @@ namespace ComicCompressor
         [Option("-p|--parallel", Description = "Run in parallel, utilizing all computing resources")]
         public bool IsParallel { get; } = false;
 
+        [Option("-m|--multi-processing", Description = "Number of images to be processed at a time (better not changed when using Parallel mode), (default: 1)")]
+        public int MultiProcessing { get; } = 1;
+
         private Logger Logger { get; set; }
 
         private void OnExecute()
         {
+            var sw = Stopwatch.StartNew();
             Logger = new Logger();
             Logger.Debug = true;
             Logger.LoggingLevel = LogLevel.Warning;
@@ -43,11 +47,13 @@ namespace ComicCompressor
             IList<string> files = new FileParser().ListAllFiles(Input, Recursive);
 
             Process(files);
+            sw.Stop();
+            System.Console.WriteLine("Elapsed Time: " + sw.ElapsedMilliseconds);
         }
 
         private void Process(IList<string> files)
         {
-            Compressor compressor = new Compressor(Logger);
+            Compressor compressor = new Compressor(Logger, MultiProcessing);
             compressor.Quality = Quality;
 
             if (!IsParallel)
@@ -59,18 +65,15 @@ namespace ComicCompressor
                 return;
             }
 
-            ParallelOptions options = new ParallelOptions
+            Parallel.ForEach(files, new ParallelOptions
             {
                 MaxDegreeOfParallelism = Environment.ProcessorCount
-            };
-
-            Parallel.ForEach(files, options, file => CompressTask(compressor, file));
-            
+            }, file => CompressTask(compressor, file));
         }
 
         private void CompressTask(Compressor compressor, string filename)
         {
-            var relativePath = Path.GetRelativePath(Input, filename);
+            var relativePath = Path.GetRelativePath(Path.GetDirectoryName(Input), filename);
             var outputPath = Path.Join(OutputFolder, Path.ChangeExtension(relativePath, "cbz"));
 
             if ((File.Exists(outputPath) && Skip) || (!filename.EndsWith(".cbr") && !filename.EndsWith(".cbz")))

@@ -15,34 +15,34 @@ namespace ComicCompressor
     public class Compressor
     {
         private Logger Logger { get; set; }
+        private int MultiProcessing { get; set; }
 
         public int Quality { get; set; } = 75;
 
-        public Compressor(Logger logger)
+        public Compressor(Logger logger, int multi_processing)
         {
             Logger = logger;
+            MultiProcessing = multi_processing;
         }
 
-        public void Compress(string filename, string outputFile = null) 
+        public void Compress(string filename, string outputFile = null)
         {
             outputFile = Path.ChangeExtension(outputFile ?? filename, "cbz");
-
 
             Logger.Log("Processing: " + filename, LogLevel.Verbose);
 
             IArchive archive = null;
 
-            if (filename.EndsWith(".cbr")) 
+            if (filename.EndsWith(".cbr"))
             {
                 archive = RarArchive.Open(filename);
-            } 
-            else if (filename.EndsWith(".cbz")) 
+            }
+            else if (filename.EndsWith(".cbz"))
             {
                 archive = ZipArchive.Open(filename);
             }
 
             ProcessArchive(archive, outputFile);
-
             Logger.Log("Finished: " + filename, LogLevel.Verbose);
         }
 
@@ -54,75 +54,84 @@ namespace ComicCompressor
 
             using (var output = ZipArchive.Create())
             {
-                var imageStreams = new List<Stream>();
-                foreach (var entry in fileEntries) 
+                var fileStreams = new List<Tuple<Stream, string>>();
+                foreach (var entry in fileEntries)
                 {
-                    ProcessEntry(entry, imageStreams, output, encoder);
+                    MemoryStream ms = new MemoryStream();
+                    using (var entryStream = entry.OpenEntryStream())
+                    {
+                        entryStream.CopyTo(ms);
+                        fileStreams.Add(new Tuple<Stream, string>(ms, entry.Key));
+                    }
                 }
 
+                Parallel.ForEach(fileStreams, new ParallelOptions()
+                {
+                    MaxDegreeOfParallelism = MultiProcessing
+                }, file => ProcessEntry(file.Item1, file.Item2, output, encoder));
+
                 archive.Dispose();
-                
+
                 Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
-                
+
                 output.SaveTo(outputPath, CompressionType.Deflate);
 
-                imageStreams.ForEach(i => i.Dispose());
+                fileStreams.ForEach(i => i.Item1.Dispose());
             }
         }
 
-        private void ProcessEntry(IArchiveEntry entry, IList<Stream> imageStreams, ZipArchive output, SimpleEncoder encoder)
+        private void ProcessEntry(Stream stream, string entryKey, ZipArchive output, SimpleEncoder encoder)
         {
-            using (var stream = entry.OpenEntryStream())
+            if (entryKey.StartsWith("__MACOSX"))
             {
-                var ms = new MemoryStream();
-                imageStreams.Add(ms);
+                return;
+            }
 
-                if (entry.Key.StartsWith("__MACOSX"))
-                {
-                    return;
-                }
+            if (!entryKey.EndsWith(".jpg") && !entryKey.EndsWith(".png"))
+            {
+                output.AddEntry(entryKey, stream);
+                return;
+            }
 
-                if (!entry.Key.EndsWith(".jpg") && !entry.Key.EndsWith(".png") )
-                {
-                    stream.CopyTo(ms);
-                    output.AddEntry(entry.Key, ms);
-                    return;
-                }
+            Bitmap bits;
 
-                Bitmap bits;
+            try
+            {
+                bits = new Bitmap(stream);
+            }
+            catch (Exception e)
+            {
+                Logger.LogError("Error parsing bitmap: " + entryKey);
+                Logger.LogDebug(e, LogLevel.Error);
+                return;
+            }
 
-                try 
-                {
-                    bits = new Bitmap(stream);
-                }
-                catch(Exception e)
-                {
-                    Logger.LogError("Error parsing bitmap: " + entry.Key);
-                    Logger.LogDebug(e, LogLevel.Error);
-                    return;
-                }
+            if (bits.PixelFormat != System.Drawing.Imaging.PixelFormat.Format24bppRgb)
+            {
+                var newBits = ChangePixelFormat(bits);
+                bits.Dispose();
+                bits = newBits;
+            }
 
-                if (bits.PixelFormat != System.Drawing.Imaging.PixelFormat.Format24bppRgb)
-                {
-                    var newBits = ChangePixelFormat(bits);
-                    bits.Dispose();
-                    bits = newBits;
-                }
-                
-                try
+            try
+            {
+                using (var ms = new MemoryStream())
                 {
                     encoder.Encode(bits, ms, Quality);
-                    output.AddEntry(entry.Key + ".webp", ms);
+                    stream.Dispose();
+                    stream = new MemoryStream();
+                    ms.WriteTo(stream);
+                    output.AddEntry(Path.ChangeExtension(entryKey, "webp"), stream);
                 }
-                catch(Exception e)
-                {
-                    Logger.LogError("Error encoding entry: " + entry.Key);
-                    Logger.LogDebug(e, LogLevel.Error);
-                }
-                finally
-                {
-                    bits.Dispose();
-                }
+            }
+            catch (Exception e)
+            {
+                Logger.LogError("Error encoding entry: " + entryKey);
+                Logger.LogDebug(e, LogLevel.Error);
+            }
+            finally
+            {
+                bits.Dispose();
             }
         }
 
@@ -130,14 +139,12 @@ namespace ComicCompressor
         {
             Bitmap clone = new Bitmap(orig.Width, orig.Height, format);
 
-            using (Graphics gr = Graphics.FromImage(clone)) 
+            using (Graphics gr = Graphics.FromImage(clone))
             {
                 gr.DrawImage(orig, new Rectangle(0, 0, clone.Width, clone.Height));
             }
 
             return clone;
-
         }
-
     }
 }
